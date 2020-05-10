@@ -1,4 +1,202 @@
-r(3, 1);
+
+// Este código es para usar con el módulo RTC DS1302 + Teclado 4x4 + LCD i2c + MIC. ATMEGA + Zumbador
+// Después de cablear los módulos, la pantalla LCD mostrará la fecha y hora predeterminadas o la configurada antes
+// El objetivo de este proyecto es que puede configurar el módulo RTC desde el teclado, y asegurarse de que permanezca almacenado
+// Luego muéstralo en la pantalla y luego podrás configurar tu alarma.
+
+// Bibliotecas necesarias
+#include <EEPROM.h>
+#include <Keypad.h>
+#include <Wire.h>
+#include <virtuabotixRTC.h>
+#include <LiquidCrystal_I2C.h>
+
+#define I2C_ADDR 0x27 // LCD I2C 16x2
+#define BACKLIGHT_PIN 3
+#define En_pin 2
+#define Rw_pin 1
+#define Rs_pin 0
+#define D4_pin 4
+#define D5_pin 5
+#define D6_pin 6
+#define D7_pin 7
+#define A0_pin A0
+
+LiquidCrystal_I2C lcd(I2C_ADDR, En_pin, Rw_pin, Rs_pin, D4_pin, D5_pin, D6_pin, D7_pin);
+
+virtuabotixRTC myRTC(2, 3, 4); // Cableado del RTC (CLK, DAT, RST) -- Si cambia el cableado, cambie los pines aquí también
+
+const byte numRows = 4; // Total de filas en el teclado
+const byte numCols = 4; // Total de columnas en el teclado
+
+// mapa de teclas define la tecla presionada de acuerdo con la fila y las columnas tal como aparece en el teclado
+char keymap[numRows][numCols] = {
+  {'1', '2', '3', 'A'},
+  {'4', '5', '6', 'B'},
+  {'7', '8', '9', 'C'},
+  {'*', '0', '#', 'D'}
+};
+
+byte rowPins[numRows] = {12, 11, 10, 9}; // Filas 0 a 3 // si modifica sus pines, debería modificar esto también
+byte colPins[numCols] = {8, 7, 6, 5}; // Columnas 0 a 3
+
+int i1, i2, i3, i4;
+char c1, c2, c3, c4, c5, c6;
+char keypressed, keypressedx;
+
+int A_hour = NULL;
+int A_minute = NULL;
+int T_hour = NULL;
+int T_minute = NULL;
+int AlarmIsActive = NULL;
+int activator = 13;      // Definir pin para activar
+int wateringTime = NULL;
+int moisture = NULL;
+int moistureLimit = NULL;
+int soilSensorValue = NULL;
+
+int cT = 0;
+int lastRevision = 0;
+int intervRev = NULL; // Cada 2 Minuto(s)
+int initActivator = 0;
+
+Keypad myKeypad = Keypad(makeKeymap(keymap), rowPins, colPins, numRows, numCols); // Definir el teclado
+
+void setup() {
+  A_hour = EEPROM.read(0);         // Lee el valor de la memoria eeprom en la dirección 0 y es asignado a la variable A_hour
+  A_minute = EEPROM.read(1);       // Lee el valor de la memoria eeprom en la dirección 1 y es asignado a la variable A_minute
+  AlarmIsActive = EEPROM.read(2);  // Lee el valor de la memoria eeprom en la dirección 2 y es asignado a la variable AlarmIsActive
+  wateringTime = EEPROM.read(3);   // Lee el valor de la memoria eeprom en la dirección 3 y es asignado a la variable wateringTime
+  moistureLimit = EEPROM.read(4);   // Lee el valor de la memoria eeprom en la dirección 4 y es asignado a la variable moistureLimit
+  intervRev = wateringTime * 2;
+  
+  Serial.begin(9600);
+  pinMode(activator, OUTPUT);
+  digitalWrite(activator, LOW);     // Activador por defecto apagado
+  lcd.begin (16, 2); // Inicializar la pantalla LCD
+  lcd.setBacklightPin(BACKLIGHT_PIN, POSITIVE);
+  lcd.setBacklight(HIGH);
+  lcd.home();
+  
+  pinMode(A0_pin, INPUT);
+}
+
+void loop() {  
+  // Mientras no se presione ninguna tecla, seguimos mostrando la fecha y la hora, estoy obligado a borrar la pantalla cada vez para que los números no se confundan
+  while (keypressed == NO_KEY) {
+    keypressed = myKeypad.getKey(); // Y debo agregar ese pequeño retraso para que la pantalla se muestre correctamente, de lo contrario no me funcionó
+    lcd.clear();
+
+    // Aquí, después de limpiar la pantalla LCD, tomamos el tiempo del módulo e imprimimos en la pantalla con las funciones habituales de la pantalla LCD
+    myRTC.updateTime();
+    cT = (myRTC.hours * 360) + (myRTC.minutes * 6); // Conteo rapido de minutos
+    moisture = analogRead(A0_pin);
+    soilSensorValue = map(moisture,0,1023,100,0); // Map Humedad
+
+    if(moistureLimit != NULL && moistureLimit > 5){
+      // Reset para un nuevo dia.
+      if(myRTC.hours == 0 && myRTC.minutes == 0 && myRTC.seconds >= 0 && myRTC.seconds <= 2){
+        lastRevision = cT;
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("Reiniciando");
+        lcd.setCursor(0, 1);
+        lcd.print("Revision Humedad");
+        delay(100);
+      }
+  
+      if(cT >= (lastRevision + (intervRev*6))){
+        lastRevision = cT;
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("Humedad: " + String(zfill(soilSensorValue)) + "%");
+        lcd.setCursor(0, 1);
+        lcd.print("Med: " + String(zfill(1023 - moisture)) + "/1023");
+        delay(2000);
+  
+        if(moistureLimit >= soilSensorValue && initActivator > 0){
+          digitalWrite(activator, HIGH);     // Encender activador
+          lcd.clear();
+          lcd.setCursor(0, 0);
+          lcd.print("Regando !!!"); // Mensaje para mostrar cuando se activa
+          lcd.setCursor(0, 1);
+          lcd.print("Espere por favor");
+          delay(wateringTime * 60000);
+          digitalWrite(activator, LOW);     // Apagar activador
+        }
+        initActivator = 1;
+      }
+    }
+    
+    
+    if (myRTC.hours == A_hour && myRTC.minutes == A_minute && AlarmIsActive == 1 && myRTC.seconds >= 0 && myRTC.seconds <= 2) {
+      digitalWrite(activator, HIGH);     // Encender activador
+      lcd.clear();
+      lcd.print("Regando !!!"); // Mensaje para mostrar cuando se activa
+      delay(wateringTime * 60000);
+      digitalWrite(activator, LOW);     // Apagar activador
+    }
+    
+    keypressedx = NO_KEY;
+    lcd.setCursor(0, 0);
+    lcd.print(String(zfill(myRTC.dayofmonth)) + "/" + String(zfill(myRTC.month)) + "/" + String(zfill(myRTC.year)) + " - ");
+    if(AlarmIsActive == 1){
+      lcd.print(String(wateringTime));
+    } else {
+      lcd.print("0");
+    }
+    lcd.print("m");
+
+    lcd.setCursor(0, 1);
+    lcd.print(String(zfill(myRTC.hours)) + ":" + String(zfill(myRTC.minutes)) + ":" + String(zfill(myRTC.seconds)));
+    
+    if(AlarmIsActive == 1){
+      lcd.print(" - " + String(zfill(A_hour)) + ":" + String(zfill(A_minute)));
+    }
+    delay(100);
+  }
+
+  // Como siempre verificamos la tecla presionada, solo procedemos a la configuración si presionamos "*"
+  if (keypressed == '*') {
+    lcd.clear();
+    lcd.print(" Configuracion  ");
+    delay(1000);
+    lcd.clear();
+    lcd.print("  Conf. Año  ");
+    /*
+        Para que pueda entender cómo funciona esto, primero nos muestra "configuración", luego imprime "Conf. Año" y ahora puede escribir su año normalmente (2-0-2-0)
+        Pasa automáticamente a configurar el mes ... hasta que termine
+        Todas las teclas del teclado se consideran caracteres (c), por lo que debemos convertirlas a int, eso es lo que hice y luego las almacenamos (i)
+        Hacemos algunos cálculos y obtenemos el año, el mes ... como int para poder inyectarlos en el RTC; de lo contrario, no se compilará
+        Meses como abril deberías escribir 04, 03 para marzo ... de lo contrario no pasará al siguiente parámetro
+        La biblioteca RTC virtuabotix ya está configurada para no aceptar horas y fechas extrañas (45/17/1990) (58:90:70), y sí, las fechas antiguas se consideran errores
+    */
+
+    char keypressed2 = myKeypad.waitForKey();
+    if (keypressed2 != NO_KEY && keypressed2 != '*' && keypressed2 != '#' && keypressed2 != 'A' && keypressed2 != 'B' && keypressed2 != 'C' && keypressed2 != 'D' ) {
+      c1 = keypressed2;
+      lcd.setCursor(0, 1);
+      lcd.print(c1);
+    }
+
+    char      keypressed3 = myKeypad.waitForKey();
+    if (keypressed3 != NO_KEY && keypressed3 != '*' && keypressed3 != '#' && keypressed3 != 'A' && keypressed3 != 'B' && keypressed3 != 'C' && keypressed3 != 'D' ) {
+      c2 = keypressed3;
+      lcd.setCursor(1, 1);
+      lcd.print(c2);
+    }
+
+    char  keypressed4 = myKeypad.waitForKey();
+    if (keypressed4 != NO_KEY && keypressed4 != '*' && keypressed4 != '#' && keypressed4 != 'A' && keypressed4 != 'B' && keypressed4 != 'C' && keypressed4 != 'D' ) {
+      c3 = keypressed4;
+      lcd.setCursor(2, 1);
+      lcd.print(c3);
+    }
+
+    char   keypressed5 = myKeypad.waitForKey();
+    if (keypressed5 != NO_KEY && keypressed5 != '*' && keypressed5 != '#' && keypressed5 != 'A' && keypressed5 != 'B' && keypressed5 != 'C' && keypressed5 != 'D' ) {
+      c4 = keypressed5;
+      lcd.setCursor(3, 1);
       lcd.print(c4);
     }
 
